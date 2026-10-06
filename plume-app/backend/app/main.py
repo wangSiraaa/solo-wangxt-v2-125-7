@@ -10,6 +10,8 @@ POST /api/plume/points          任意经纬度点浓度（核对用）
 GET  /api/plume/wind-check      风向↔地图坐标换算检查
 POST /api/plume/rise            Holland 抬升高程明细
 GET  /api/checks                解析核对用例结果
+GET/POST /api/snapshots         命名情景快照（仅输入，不含计算结果）
+GET/PATCH/DELETE /api/snapshots/{id}  读取 / 重命名 / 删除单个快照
 """
 from __future__ import annotations
 
@@ -33,6 +35,8 @@ from .schemas import (
     PlumePointRequest,
     PlumePointResponse,
     PlumeRiseInput,
+    SnapshotCreateRequest,
+    SnapshotRenameRequest,
 )
 from .services import DISCLAIMER, run_grid, run_points
 
@@ -195,3 +199,90 @@ def plume_rise(payload: dict):
 @app.get("/api/checks")
 def checks():
     return run_all_checks()
+
+
+# ---- 命名情景快照 -------------------------------------------------------
+# 快照只保存输入（源/气象有效值 + 记录引用 + 网格/模型参数），不保存结果；
+# 恢复由前端重新调用 /api/plume/grid 完成，旧网格数值不会被当作新结果。
+
+
+def _snapshot_view(repo, snap: dict, source_ids: set[int], met_ids: set[int]) -> dict:
+    """给快照标注其引用的源/气象记录是否仍存在（None 表示无引用）。"""
+    payload = snap.get("payload") or {}
+    sid = payload.get("source_id")
+    mid = payload.get("met_id")
+    return {
+        "id": snap["id"],
+        "name": snap["name"],
+        "created_at": snap["created_at"],
+        "updated_at": snap["updated_at"],
+        "source_id": sid,
+        "met_id": mid,
+        "source_exists": (sid in source_ids) if sid is not None else None,
+        "met_exists": (mid in met_ids) if mid is not None else None,
+    }
+
+
+def _reference_sets(repo) -> tuple[set[int], set[int]]:
+    source_ids = {s["id"] for s in repo.list_sources()}
+    met_ids = {m["id"] for m in repo.list_meteorology()}
+    return source_ids, met_ids
+
+
+@app.get("/api/snapshots")
+def list_snapshots():
+    repo = get_repository()
+    source_ids, met_ids = _reference_sets(repo)
+    return {
+        "persistence": repo.snapshot_persistence,
+        "snapshots": [
+            _snapshot_view(repo, s, source_ids, met_ids)
+            for s in repo.list_snapshots()
+        ],
+    }
+
+
+@app.post("/api/snapshots", status_code=201)
+def create_snapshot(req: SnapshotCreateRequest):
+    repo = get_repository()
+    snap = repo.create_snapshot(req.name, req.payload.model_dump())
+    source_ids, met_ids = _reference_sets(repo)
+    return {
+        **_snapshot_view(repo, snap, source_ids, met_ids),
+        "payload": snap["payload"],
+    }
+
+
+@app.get("/api/snapshots/{snapshot_id}")
+def get_snapshot(snapshot_id: int):
+    repo = get_repository()
+    snap = repo.get_snapshot(snapshot_id)
+    if snap is None:
+        raise HTTPException(404, "快照不存在")
+    source_ids, met_ids = _reference_sets(repo)
+    return {
+        **_snapshot_view(repo, snap, source_ids, met_ids),
+        "payload": snap["payload"],
+    }
+
+
+@app.patch("/api/snapshots/{snapshot_id}")
+def rename_snapshot(snapshot_id: int, req: SnapshotRenameRequest):
+    repo = get_repository()
+    snap = repo.rename_snapshot(snapshot_id, req.name)
+    if snap is None:
+        raise HTTPException(404, "快照不存在")
+    source_ids, met_ids = _reference_sets(repo)
+    return {
+        **_snapshot_view(repo, snap, source_ids, met_ids),
+        "payload": snap["payload"],
+    }
+
+
+@app.delete("/api/snapshots/{snapshot_id}")
+def delete_snapshot(snapshot_id: int):
+    # 只删除快照记录本身；排放源/气象原始记录不受任何影响
+    repo = get_repository()
+    if not repo.delete_snapshot(snapshot_id):
+        raise HTTPException(404, "快照不存在")
+    return {"deleted": True, "id": snapshot_id}

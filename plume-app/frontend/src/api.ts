@@ -3,6 +3,9 @@ import type {
   MetRow,
   PlumeGridRequest,
   PlumeGridResponse,
+  SnapshotListResponse,
+  SnapshotPayload,
+  SnapshotRecord,
   SourceRow,
 } from './types'
 
@@ -41,4 +44,24 @@ export const api = {
       `/api/plume/wind-check?wind_from_deg=${encodeURIComponent(windFromDeg)}`,
     ).then((r) => jsonOrThrow<any>(r)),
   checks: () => fetch('/api/checks').then((r) => jsonOrThrow<ChecksReport>(r)),
+  snapshots: () =>
+    fetch('/api/snapshots').then((r) => jsonOrThrow<SnapshotListResponse>(r)),
+  createSnapshot: (name: string, payload: SnapshotPayload) =>
+    fetch('/api/snapshots', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, payload }),
+    }).then((r) => jsonOrThrow<SnapshotRecord>(r)),
+  getSnapshot: (id: number) =>
+    fetch(`/api/snapshots/${id}`).then((r) => jsonOrThrow<SnapshotRecord>(r)),
+  renameSnapshot: (id: number, name: string) =>
+    fetch(`/api/snapshots/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }).then((r) => jsonOrThrow<SnapshotRecord>(r)),
+  deleteSnapshot: (id: number) =>
+    fetch(`/api/snapshots/${id}`, { method: 'DELETE' }).then((r) =>
+      jsonOrThrow<{ deleted: boolean; id: number }>(r),
+    ),
 }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { MetRow, SourceRow } from '../types'
+import { computed, ref } from 'vue'
+import type { MetRow, SnapshotMeta, SourceRow } from '../types'
 import type { FormState } from '../form'
 
 const props = defineProps<{
@@ -8,6 +8,9 @@ const props = defineProps<{
   meteorology: MetRow[]
   form: FormState
   loading: boolean
+  snapshots: SnapshotMeta[]
+  snapshotPersistence: string
+  snapshotBusy: boolean
 }>()
 
 const emit = defineEmits<{
@@ -15,6 +18,10 @@ const emit = defineEmits<{
   (e: 'select-source', id: number): void
   (e: 'select-met', id: number): void
   (e: 'run'): void
+  (e: 'save-snapshot', name: string): void
+  (e: 'restore-snapshot', id: number): void
+  (e: 'rename-snapshot', id: number, name: string): void
+  (e: 'delete-snapshot', id: number): void
 }>()
 
 function patch(p: Partial<FormState>) {
@@ -22,6 +29,58 @@ function patch(p: Partial<FormState>) {
 }
 
 const isCalm = computed(() => props.form.windSpeed < props.form.calmThreshold)
+
+// ---- 情景快照（本地 UI 状态） ----
+const newSnapshotName = ref('')
+const editingId = ref<number | null>(null)
+const editingName = ref('')
+
+function saveSnapshot() {
+  const name = newSnapshotName.value.trim()
+  if (!name) return
+  emit('save-snapshot', name)
+  newSnapshotName.value = ''
+}
+
+function startRename(s: SnapshotMeta) {
+  editingId.value = s.id
+  editingName.value = s.name
+}
+
+function commitRename() {
+  const name = editingName.value.trim()
+  if (editingId.value != null && name) {
+    emit('rename-snapshot', editingId.value, name)
+  }
+  editingId.value = null
+}
+
+function removeSnapshot(s: SnapshotMeta) {
+  if (
+    window.confirm(
+      `删除快照「${s.name}」？\n只删除该快照，排放源与气象记录不受影响。`,
+    )
+  ) {
+    emit('delete-snapshot', s.id)
+  }
+}
+
+function fmtTime(iso: string) {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function snapshotInvalidReason(s: SnapshotMeta): string | null {
+  if (s.source_id != null && s.source_exists === false) {
+    return `引用的排放源记录 #${s.source_id} 已不存在`
+  }
+  if (s.met_id != null && s.met_exists === false) {
+    return `引用的气象情景记录 #${s.met_id} 已不存在`
+  }
+  return null
+}
 </script>
 
 <template>
@@ -193,6 +252,76 @@ const isCalm = computed(() => props.form.windSpeed < props.form.calmThreshold)
         {{ loading ? '计算中…' : '运行烟羽计算' }}
       </button>
       <span v-if="isCalm" class="badge bad">静风，已停用</span>
+    </div>
+
+    <div class="section">
+      <h2>⑤ 情景快照（只保存输入，恢复时重新计算）</h2>
+      <div class="muted" style="font-size:11px;margin-bottom:6px">
+        保存当前源/气象有效值、模型类型、抬升与采样网格参数；
+        不保存浓度结果，恢复时将重新调用计算接口生成新结果。
+      </div>
+      <div class="snap-save">
+        <input
+          data-test="snapshot-name"
+          class="num"
+          type="text"
+          maxlength="120"
+          placeholder="快照名称，如：第 6 周课堂演示"
+          v-model="newSnapshotName"
+          @keyup.enter="saveSnapshot"
+        />
+        <button
+          data-test="snapshot-save"
+          @click="saveSnapshot"
+          :disabled="snapshotBusy || !newSnapshotName.trim()"
+        >
+          保存
+        </button>
+      </div>
+      <div v-if="snapshotPersistence" class="muted" style="font-size:11px;margin:4px 0 8px">
+        存储方式：{{ snapshotPersistence }}
+      </div>
+      <div v-if="!snapshots.length" class="muted" style="font-size:12px">
+        暂无快照。
+      </div>
+      <div v-for="s in snapshots" :key="s.id" class="snap-item" :data-test="`snapshot-${s.id}`">
+        <template v-if="editingId === s.id">
+          <div class="snap-save">
+            <input
+              class="num"
+              type="text"
+              maxlength="120"
+              v-model="editingName"
+              @keyup.enter="commitRename"
+              @keyup.esc="editingId = null"
+            />
+            <button class="ghost" @click="commitRename" :disabled="!editingName.trim()">确定</button>
+            <button class="ghost" @click="editingId = null">取消</button>
+          </div>
+        </template>
+        <template v-else>
+          <div class="snap-head">
+            <span class="snap-name" :title="s.name">{{ s.name }}</span>
+            <span class="muted" style="font-size:10px;white-space:nowrap">{{ fmtTime(s.created_at) }}</span>
+          </div>
+          <div v-if="snapshotInvalidReason(s)" class="notice warn" style="margin:4px 0;padding:4px 8px;font-size:11px">
+            已失效：{{ snapshotInvalidReason(s) }}。不会改用其他源/气象，请处理后再恢复。
+          </div>
+          <div class="snap-actions">
+            <button
+              class="ghost"
+              :data-test="`snapshot-restore-${s.id}`"
+              @click="emit('restore-snapshot', s.id)"
+              :disabled="snapshotBusy || !!snapshotInvalidReason(s)"
+              :title="snapshotInvalidReason(s) || '回填输入并重新运行计算'"
+            >
+              恢复
+            </button>
+            <button class="ghost" @click="startRename(s)" :disabled="snapshotBusy">重命名</button>
+            <button class="ghost" @click="removeSnapshot(s)" :disabled="snapshotBusy">删除</button>
+          </div>
+        </template>
+      </div>
     </div>
   </div>
 </template>

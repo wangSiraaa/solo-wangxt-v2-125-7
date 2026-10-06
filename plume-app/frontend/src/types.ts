@@ -116,3 +116,38 @@ export interface ApiError {
   message: string
   action?: string
 }
+
+/** 命名情景快照保存的完整有效输入（不含任何计算结果）。 */
+export interface SnapshotPayload {
+  source_id: number | null
+  met_id: number | null
+  source: SourceInput
+  meteorology: MeteorologyInput
+  grid: GridSpec
+  plume_rise: { use_plume_rise: boolean }
+  parameterization: 'briggs_rural' | 'power_law'
+  power_law: { ay: number; py: number; az: number; pz: number } | null
+  calm_threshold_ms: number
+}
+
+export interface SnapshotMeta {
+  id: number
+  name: string
+  created_at: string
+  updated_at: string
+  source_id: number | null
+  met_id: number | null
+  /** 引用的源/气象记录是否仍存在；null 表示无引用 */
+  source_exists: boolean | null
+  met_exists: boolean | null
+}
+
+export interface SnapshotRecord extends SnapshotMeta {
+  payload: SnapshotPayload
+}
+
+export interface SnapshotListResponse {
+  /** 持久化语义说明（内存模式=本次运行有效；postgis=分表持久化） */
+  persistence: string
+  snapshots: SnapshotMeta[]
+}

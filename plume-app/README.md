@@ -96,6 +96,14 @@ C(x,y,0) = Q / (π·u·σy·σz) · exp(−y²/(2σy²)) · exp(−He²/(2σz²)
    固定物理点的浓度与分辨率无关（见解析核对 #9）。
 6. **地图展示采样范围**：虚线矩形是采样边界，角点经纬度随响应返回；
    右上角标注节点数与间距，等值线为网格内线性插值，**不外推、不暗示无限精度**。
+7. **命名情景快照**：可把一次课堂演示的**输入**（所选虚构源/气象记录引用
+   ＋界面调整后的有效值、模型类型、抬升开关、采样框与网格参数）命名保存，
+   下周从原样继续。快照**只存输入、不存浓度结果**——恢复时回填表单并
+   重新调用 `/api/plume/grid` 现算，旧网格数值不会被当作新结果。
+   快照存于独立的 `scenario_snapshot` 表（内存模式则仅存于后端进程，
+   **本次运行有效、重启丢失**，界面有明示）；删除快照不影响源/气象记录。
+   若快照引用的源/气象记录已不存在，列表与恢复操作都会给出明确的失效提示，
+   绝不静默改用其他记录。
 
 ## 4. 解析核对用例
 
@@ -141,6 +149,8 @@ POST /api/plume/points           任意经纬度点求值（核对用）
 GET  /api/plume/wind-check       风向↔坐标换算检查
 POST /api/plume/rise             Holland 抬升明细
 GET  /api/checks                 10 条解析核对
+GET/POST     /api/snapshots      情景快照列表 / 新建（仅输入，不含结果）
+GET/PATCH/DELETE /api/snapshots/{id}   读取 / 重命名 / 删除
 ```
 
 交互文档：http://localhost:8000/docs 。
@@ -155,7 +165,7 @@ backend/app/
   plume_rise.py     Holland 抬升
   checks.py         10 条解析核对（API 与 pytest 共用）
   services.py       网格构造、override 合并、等值级、响应组装
-  repository.py     PostGIS 仓储 / 内存回退
+  repository.py     PostGIS 仓储 / 内存回退（含情景快照 CRUD 与持久化语义）
 frontend/src/
   components/MapView.vue       MapLibre 图层（烟羽/等值线/背景/采样框/风矢）
   marching.ts                  marching squares（无第三方几何库）

@@ -35,6 +35,17 @@ CREATE TABLE IF NOT EXISTS meteorology_scenario (
 CREATE INDEX IF NOT EXISTS idx_emission_source_geom
     ON emission_source USING GIST (location);
 
+-- 命名情景快照：只保存一次演示的输入（JSONB），与源/气象原始记录分表。
+-- payload 结构见 backend/app/schemas.py SnapshotPayload：
+-- 源/气象有效值 + source_id/met_id 引用 + 网格/模型/抬升参数；不含任何计算结果。
+CREATE TABLE IF NOT EXISTS scenario_snapshot (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 120),
+    payload     JSONB NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- 幂等灌入虚构数据
 INSERT INTO emission_source
     (id, name, pollutant, location, stack_height_m, emission_rate_g_s,
