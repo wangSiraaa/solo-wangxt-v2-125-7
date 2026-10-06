@@ -91,6 +91,35 @@ export interface PlumeGridRequest {
   calm_threshold_ms: number
 }
 
+/** 命名情景快照载荷：只含输入参数有效值，绝不含网格计算结果。 */
+export interface SnapshotPayload {
+  source_id: number
+  met_id: number
+  source: SourceInput
+  meteorology: MeteorologyInput
+  plume_rise: { use_plume_rise: boolean }
+  parameterization: 'briggs_rural' | 'power_law'
+  power_law: { ay: number; py: number; az: number; pz: number } | null
+  grid: GridSpec
+  calm_threshold_ms: number
+}
+
+export interface SnapshotRow {
+  id: number
+  name: string
+  payload: SnapshotPayload
+  created_at: string
+  updated_at: string
+  snapshot_store?: string
+  restore_note?: string
+}
+
+export interface SnapshotListResponse {
+  snapshot_store: string
+  snapshot_store_note: string
+  snapshots: SnapshotRow[]
+}
+
 export interface CheckResult {
   id: string
   title: string

@@ -1,13 +1,19 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { MetRow, SourceRow } from '../types'
+import type { MetRow, SnapshotRow, SourceRow } from '../types'
 import type { FormState } from '../form'
+import SnapshotPanel from './SnapshotPanel.vue'
 
 const props = defineProps<{
   sources: SourceRow[]
   meteorology: MetRow[]
   form: FormState
   loading: boolean
+  snapshots: SnapshotRow[]
+  snapshotStoreNote: string
+  snapshotBusy: boolean
+  snapshotMessage: string | null
+  snapshotMessageKind: 'info' | 'err'
 }>()
 
 const emit = defineEmits<{
@@ -15,6 +21,10 @@ const emit = defineEmits<{
   (e: 'select-source', id: number): void
   (e: 'select-met', id: number): void
   (e: 'run'): void
+  (e: 'save-snapshot', name: string): void
+  (e: 'restore-snapshot', id: number): void
+  (e: 'rename-snapshot', id: number, name: string): void
+  (e: 'delete-snapshot', id: number): void
 }>()
 
 function patch(p: Partial<FormState>) {
@@ -56,6 +66,18 @@ const isCalm = computed(() => props.form.windSpeed < props.form.calmThreshold)
         下列调整只用于本次计算请求，不会写回数据库记录。
       </div>
     </div>
+
+    <SnapshotPanel
+      :snapshots="snapshots"
+      :store-note="snapshotStoreNote"
+      :busy="snapshotBusy"
+      :message="snapshotMessage"
+      :message-kind="snapshotMessageKind"
+      @save="(name) => emit('save-snapshot', name)"
+      @restore="(id) => emit('restore-snapshot', id)"
+      @rename="(id, name) => emit('rename-snapshot', id, name)"
+      @remove="(id) => emit('delete-snapshot', id)"
+    />
 
     <div class="section">
       <h2>① 源项</h2>

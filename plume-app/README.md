@@ -94,7 +94,14 @@ C(x,y,0) = Q / (π·u·σy·σz) · exp(−y²/(2σy²)) · exp(−He²/(2σz²)
 5. **网格分辨率只改变采样**：源/气象输入是独立对象，
    界面调整通过 override 合并、不改数据库；改 nx/ny 不改变任何物理输入，
    固定物理点的浓度与分辨率无关（见解析核对 #9）。
-6. **地图展示采样范围**：虚线矩形是采样边界，角点经纬度随响应返回；
+6. **命名情景快照只存输入、不存结果**：可把当前源/气象/模型类型/抬升/
+   采样框与网格参数的**有效值**存为命名快照（与源/气象原始记录分表持久化），
+   下周从原样继续讲解。恢复 = 取回输入并**重新调用当前计算接口**，
+   历史网格数值绝不作为新模型结果；引用的源/气象记录已删除时返回
+   `409 stale_reference` 并明确提示，绝不静默改用其他记录。
+   内存回退模式下快照仅保存在**本次运行**的进程内存中，重启即清空
+   （`/api/health` 与快照列表均标明该语义）。
+7. **地图展示采样范围**：虚线矩形是采样边界，角点经纬度随响应返回；
    右上角标注节点数与间距，等值线为网格内线性插值，**不外推、不暗示无限精度**。
 
 ## 4. 解析核对用例
@@ -117,7 +124,7 @@ C(x,y,0) = Q / (π·u·σy·σz) · exp(−y²/(2σy²)) · exp(−He²/(2σz²)
 运行后端测试：
 
 ```bash
-cd backend && python3 -m pytest tests/ -q     # 9 passed
+cd backend && python3 -m pytest tests/ -q     # 18 passed（含快照行为核对）
 ```
 
 前端工具：
@@ -127,6 +134,7 @@ cd frontend
 npm run build                  # vue-tsc 类型检查 + vite 构建
 npx tsx scripts/smoke-contours.ts   # marching squares 数值冒烟
 npx tsx scripts/e2e.ts              # 需 Playwright Chromium：渲染/静风/核对
+npx tsx scripts/e2e-snapshots.ts    # 快照保存/恢复/重命名/删除/失效提示验收
 ```
 
 ## 5. API 一览
@@ -141,6 +149,11 @@ POST /api/plume/points           任意经纬度点求值（核对用）
 GET  /api/plume/wind-check       风向↔坐标换算检查
 POST /api/plume/rise             Holland 抬升明细
 GET  /api/checks                 10 条解析核对
+GET  /api/snapshots              命名情景快照列表（只含输入参数）
+POST /api/snapshots              保存快照 {name, payload}
+PATCH  /api/snapshots/{id}       重命名快照
+DELETE /api/snapshots/{id}       删除快照（不影响源/气象记录）
+POST /api/snapshots/{id}/restore 取回快照输入（校验引用；计算需重新调用 /api/plume/grid）
 ```
 
 交互文档：http://localhost:8000/docs 。
@@ -158,8 +171,9 @@ backend/app/
   repository.py     PostGIS 仓储 / 内存回退
 frontend/src/
   components/MapView.vue       MapLibre 图层（烟羽/等值线/背景/采样框/风矢）
+  components/SnapshotPanel.vue 命名情景快照（保存/恢复/重命名/删除）
   marching.ts                  marching squares（无第三方几何库）
-db/init.sql        PostGIS 建表 + 虚构数据
+db/init.sql        PostGIS 建表（含 scenario_snapshot 快照表）+ 虚构数据
 ```
 
 ## 7. 虚构数据

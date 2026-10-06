@@ -121,3 +121,33 @@ class PlumePointRequest(PlumeGridRequest):
 
 class PlumePointResponse(BaseModel):
     points: list[dict]
+
+
+class SnapshotPayload(BaseModel):
+    """命名情景快照的载荷：**只保存输入参数的有效值**。
+
+    保存时刻界面上的有效输入（含未写回数据库的临时调整），
+    并记录所选源/气象情景的 id 引用，用于恢复时校验记录是否仍存在。
+    绝不保存任何网格浓度结果——恢复后必须重新调用计算接口。
+    """
+
+    source_id: int = Field(..., description="保存时所选虚构排放源 id（引用校验用）")
+    met_id: int = Field(..., description="保存时所选虚构气象情景 id（引用校验用）")
+    source: SourceInput = Field(..., description="源项有效值（含界面调整）")
+    meteorology: MeteorologyInput = Field(..., description="气象有效值（含界面调整）")
+    plume_rise: PlumeRiseInput = Field(default_factory=PlumeRiseInput)
+    parameterization: Literal["briggs_rural", "power_law"] = "briggs_rural"
+    power_law: dict | None = Field(
+        None, description="power_law 参数: ay, py, az, pz（均为正）"
+    )
+    grid: GridSpec = Field(default_factory=GridSpec, description="采样框与网格参数")
+    calm_threshold_ms: float = Field(1.0, gt=0.0, le=5.0)
+
+
+class SnapshotCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    payload: SnapshotPayload
+
+
+class SnapshotRenameRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)

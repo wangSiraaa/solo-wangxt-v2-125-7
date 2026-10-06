@@ -10,11 +10,17 @@ POST /api/plume/points          任意经纬度点浓度（核对用）
 GET  /api/plume/wind-check      风向↔地图坐标换算检查
 POST /api/plume/rise            Holland 抬升高程明细
 GET  /api/checks                解析核对用例结果
+GET  /api/snapshots             命名情景快照列表（只含输入参数，无计算结果）
+POST /api/snapshots             保存快照
+PATCH  /api/snapshots/{id}      重命名快照
+DELETE /api/snapshots/{id}      删除快照（不影响源/气象记录）
+POST /api/snapshots/{id}/restore  取回快照输入（校验引用；计算需重新调用 /api/plume/grid）
 """
 from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .checks import run_all_checks
 from .config import settings
@@ -33,6 +39,8 @@ from .schemas import (
     PlumePointRequest,
     PlumePointResponse,
     PlumeRiseInput,
+    SnapshotCreateRequest,
+    SnapshotRenameRequest,
 )
 from .services import DISCLAIMER, run_grid, run_points
 
@@ -52,8 +60,6 @@ app.add_middleware(
 
 @app.exception_handler(CalmWindError)
 async def calm_wind_handler(_request, exc: CalmWindError):
-    from fastapi.responses import JSONResponse
-
     return JSONResponse(
         status_code=422,
         content={
@@ -66,8 +72,6 @@ async def calm_wind_handler(_request, exc: CalmWindError):
 
 @app.exception_handler(PlumeInputError)
 async def plume_input_handler(_request, exc: PlumeInputError):
-    from fastapi.responses import JSONResponse
-
     return JSONResponse(
         status_code=422,
         content={"error": "invalid_input", "message": str(exc)},
@@ -77,7 +81,17 @@ async def plume_input_handler(_request, exc: PlumeInputError):
 @app.get("/api/health")
 def health():
     repo = get_repository()
-    return {"status": "ok", "repository": repo.backend, "disclaimer": DISCLAIMER}
+    return {
+        "status": "ok",
+        "repository": repo.backend,
+        "snapshot_store": repo.snapshot_store,
+        "snapshot_store_note": (
+            "快照跨重启持久保存（scenario_snapshot 表）"
+            if repo.snapshot_store == "postgis"
+            else "快照仅保存在本次运行的内存中，进程重启即清空"
+        ),
+        "disclaimer": DISCLAIMER,
+    }
 
 
 @app.get("/api/meta")
@@ -195,3 +209,95 @@ def plume_rise(payload: dict):
 @app.get("/api/checks")
 def checks():
     return run_all_checks()
+
+
+# ---- 命名情景快照：只保存输入参数有效值，与源/气象记录分离持久化 ----
+
+SNAPSHOT_RESTORE_NOTE = (
+    "快照仅保存输入参数（有效值），不含任何网格浓度结果；"
+    "请将这些输入重新提交 /api/plume/grid 计算，历史结果不作为新模型输出。"
+)
+
+
+def _snapshot_out(row: dict, repo) -> dict:
+    return {**row, "snapshot_store": repo.snapshot_store}
+
+
+@app.get("/api/snapshots")
+def list_snapshots():
+    repo = get_repository()
+    return {
+        "snapshot_store": repo.snapshot_store,
+        "snapshot_store_note": (
+            "快照跨重启持久保存（scenario_snapshot 表）"
+            if repo.snapshot_store == "postgis"
+            else "快照仅保存在本次运行的内存中，进程重启即清空"
+        ),
+        "snapshots": [_snapshot_out(s, repo) for s in repo.list_snapshots()],
+    }
+
+
+@app.post("/api/snapshots", status_code=201)
+def create_snapshot(req: SnapshotCreateRequest):
+    repo = get_repository()
+    row = repo.create_snapshot(req.name, req.payload.model_dump())
+    return _snapshot_out(row, repo)
+
+
+@app.get("/api/snapshots/{snapshot_id}")
+def get_snapshot(snapshot_id: int):
+    repo = get_repository()
+    row = repo.get_snapshot(snapshot_id)
+    if row is None:
+        raise HTTPException(404, "快照不存在")
+    return _snapshot_out(row, repo)
+
+
+@app.patch("/api/snapshots/{snapshot_id}")
+def rename_snapshot(snapshot_id: int, req: SnapshotRenameRequest):
+    repo = get_repository()
+    row = repo.rename_snapshot(snapshot_id, req.name)
+    if row is None:
+        raise HTTPException(404, "快照不存在")
+    return _snapshot_out(row, repo)
+
+
+@app.delete("/api/snapshots/{snapshot_id}")
+def delete_snapshot(snapshot_id: int):
+    # 只删除快照记录本身；源/气象原始记录不受任何影响
+    repo = get_repository()
+    if not repo.delete_snapshot(snapshot_id):
+        raise HTTPException(404, "快照不存在")
+    return {"deleted": snapshot_id}
+
+
+@app.post("/api/snapshots/{snapshot_id}/restore")
+def restore_snapshot(snapshot_id: int):
+    """取回快照输入。恢复的是**输入参数**，不是历史计算结果：
+    前端拿到载荷后必须重新调用 /api/plume/grid。
+    引用的源/气象记录已不存在时返回 409，绝不静默改用其他记录。
+    """
+    repo = get_repository()
+    row = repo.get_snapshot(snapshot_id)
+    if row is None:
+        raise HTTPException(404, "快照不存在")
+    payload = row["payload"]
+    missing = []
+    if repo.get_source(payload["source_id"]) is None:
+        missing.append(f"排放源 id={payload['source_id']}")
+    if repo.get_meteorology(payload["met_id"]) is None:
+        missing.append(f"气象情景 id={payload['met_id']}")
+    if missing:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "stale_reference",
+                "message": (
+                    f"快照「{row['name']}」引用的{'、'.join(missing)}已不存在，"
+                    "无法按原样恢复。输入未被改动；请检查记录后重试，或删除该快照。"
+                ),
+                "missing": missing,
+                "snapshot": _snapshot_out(row, repo),
+            },
+        )
+    return {**_snapshot_out(row, repo), "restore_note": SNAPSHOT_RESTORE_NOTE}
